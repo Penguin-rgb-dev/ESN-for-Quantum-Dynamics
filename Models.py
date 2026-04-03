@@ -61,6 +61,17 @@ def Z(N):   #Pauli Z for the composite system
     Z = np.array(Z)
     return Z
 
+def ZZ(N):
+    z = np.array([[1,0],[0,-1]])
+    ZZ = []
+    for i in range(N):
+        for j in range(i+1,N):
+            part_1 = np.kron(I(i),z)
+            part_1 = np.kron(part_1,I(j-i-1))
+            part_2 = np.kron(z,I(N-j-1))
+            ZZ.append(np.kron(part_1,part_2))
+    return ZZ
+
 def Heisenberg_NN(N,K,h):   #Weights are in the range (0,K); mag. field = h
     x = X(N)
     y = Y(N)
