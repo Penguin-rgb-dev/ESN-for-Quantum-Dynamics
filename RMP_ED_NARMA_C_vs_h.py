@@ -1,112 +1,131 @@
-## NARMA Task for delay=10, scanning over values of h.
+## Trying joblib for NARMA using RMP and ED.
 
+import os
+from joblib import Parallel, delayed
 import numpy as np
 from scipy.linalg import eigh
 from sklearn.linear_model import LinearRegression
-from Models import X, Y, Z, ZZ, Ising
+# Assuming these are your custom modules
+from Models import get_Pauli_X, get_Pauli_Y, get_Pauli_Z, get_ZZ, Ising 
 from Density_matrix import trace_1, mixed_density_matrix
-from sklearn.linear_model import LinearRegression
-rng = np.random.default_rng(seed=42)
 
-## Defining input function
-def inpt(rho, s, N):
-    a = np.array([[0],[1]])
-    b = np.array([[1],[0]])
-    psi_s = np.sqrt(1-s)*a + np.sqrt(s)*b
-    rho_s = np.outer(psi_s, psi_s)
-    rho_rest = trace_1(rho,N)
-    density_matrix = np.kron(rho_s, rho_rest)
-    return density_matrix
+# --- 1. GLOBAL DATA GENERATION (NARMA) ---
+n = 10
+washout, train, test = 1000, 2000, 2000
+total_steps = washout + train + test + n + 100
+rng_data = np.random.default_rng(seed=42)
+s_raw = rng_data.uniform(0.0, 0.2, total_steps)
+y_raw = np.zeros(total_steps)
 
-## Dataset (linear memory y_(n) = s_(n-delay))
-n=10    #delay or order of NARMA
-washout = 1000
-train = 2000
-test = 2000
-# input
-s = rng.uniform(0.0,0.2,5100)
-#output
-y = np.zeros(5100)
-for i in range(11,5100):
-    y[i] = 0.1 + 1.5*s[i-n]*s[i-1] + 0.05*y[i-1]*np.sum(y[i-n:i]) + 0.3*y[i-1]
+for i in range(n, total_steps):
+    y_raw[i] = 0.1 + 1.5 * s_raw[i-n] * s_raw[i-1] + 0.05 * y_raw[i-1] * np.sum(y_raw[i-n:i]) + 0.3 * y_raw[i-1]
 
-s = s[100:]/0.2 # Rescaling input to be in [0,1] for inputting into the quantum reservoir
-y = y[100:]
+s = s_raw[100:] / 0.2 
+y = y_raw[100:]
+
 s_washout = s[:washout]
 s_train = s[washout:washout+train]
-s_test = s[washout+train:]
-y_washout = y[:washout]
+s_test = s[washout+train:washout+train+test]
 y_train = y[washout:washout+train]
-y_test = y[washout+train:]
+y_test = y[washout+train:washout+train+test]
 
-# Loop over parameters
-N=10
-J=1
-tau=10*J
-Cov_mean = []
-Cov_std = []
-H = np.logspace(-2,2,num=20)
-for h in H:
-    Cov = []    # Cov of all 100 realizations
-    for l in range(100):    #Looping over 100 different realizations of the hamiltonian 
-        Hamiltonian, Jij = Ising(N, J, h)
-        rho = mixed_density_matrix(10,2,N)  # Initial mixed state
-        ## Diagonalizing the Hamiltonian
-        E, U = eigh(Hamiltonian)
-        energy_diffs = E[:, np.newaxis] - E[np.newaxis, :]
-        phase_factors = np.exp(-1j * energy_diffs * tau)
-        
-        ## Defining Time evolution via ED
-        def time_evolve(rho_0): #time evolve t=1 
-            rho_energy = U.conj().T @ rho_0 @ U
-            rho_energy_t = rho_energy * phase_factors
-            rho_t = U @ rho_energy_t @ U.conj().T
-            return rho_t
+# Create the operators once
+N, J, tau = 10, 1, 10
+x_ops = get_Pauli_X(N)
+y_ops = get_Pauli_Y(N)
+z_ops = get_Pauli_Z(N)
+zz_ops = get_ZZ(N,z_ops)
 
-        ## Defing the list of observables
-        x = X(N)
-        y = Y(N)
-        z = Z(N)
-        zz = ZZ(N)  #list of all pairs
-        obs  = list(x) + list(y) + list(z) + zz
+# --- 2. THE SIMULATION FUNCTION ---
+def run_simulation(h_val, seed):
+    # Create a local RNG for this task
+    local_rng = np.random.default_rng(seed)
+    # --- 2.1. MODEL SETUP ---   
+    Hamiltonian, _ = Ising(N, J, h_val, local_rng, x_ops=x_ops, z_ops=z_ops)
+    rho = mixed_density_matrix(10, 2, N, local_rng, complex_ensemble=True)
+    E, U = eigh(Hamiltonian)
+    U_dag = U.conj().T
+    phase_factors = np.exp(-1j * (E[:, np.newaxis] - E[np.newaxis, :]) * tau)
 
-        ## Washout, training, and testing
-        # Washout
-        for s in s_washout:
-            rho = inpt(rho,s,N)
-            rho = time_evolve(rho)
-        # Training
-        X = np.zeros([train,len(obs)])
-        for k in range(len(s_train)):
-            rho = inpt(rho,s_train[k],N)
-            rho = time_evolve(rho)
-            for j in range(len(obs)):
-                X[k,j] = np.real(np.trace(rho@obs[j]))
-        model = LinearRegression()
-        model.fit(X,y_train)
-        #Testing
-        y_pred = []
-        for s in s_test:
-            rho = inpt(rho,s,N)
-            rho = time_evolve(rho)
-            x = []
-            for i in range(len(obs)):
-                x.append(np.real(np.trace(rho@obs[i])),)
-            x = np.array(x)
-            x = x[np.newaxis,:]
-            y_pred.append(model.predict(x))
+    # --- 2.2. VECTORIZE OBSERVABLES ---
+    # We flatten observables into (n_obs, dim**2) to use dot products instead of Tr(rho @ O)
+    raw_obs = x_ops + y_ops + z_ops + zz_ops
+    obs_matrix = np.array([o.flatten() for o in raw_obs]) 
 
-        y_pred = np.array(y_pred)
-        y_pred = y_pred[:,0]
+    def get_features(rho_matrix):
+        # Tr(A @ B) is the dot product of A.flatten() and B.T.flatten()
+        # Since observables are often Hermitian, we just use the flattened obs_matrix
+        return np.real(obs_matrix @ rho_matrix.flatten())
 
-        cov = np.cov(y_test,y_pred)
-        C = (cov[0,1]**2)/(cov[0,0]*cov[1,1])
-        Cov.append(C)
+    def time_evolve_fast(rho_0):
+        rho_energy_t = (U_dag @ rho_0 @ U) * phase_factors
+        return U @ rho_energy_t @ U_dag
 
-    Cov = np.array(Cov)
-    Cov_mean.append(np.mean(Cov))
-    Cov_std.append(np.sqrt(np.var(Cov)))
-H = np.array(H)
-np.save('Cov_mean.npy',Cov_mean)
-np.save('Cov_std.npy',Cov_std)
-np.save('H.npy',H)
+    def inpt_fast(rho_in, s_val, N_spins):
+        # Pre-calculated basis states for speed
+        psi_s = np.array([np.sqrt(s_val), np.sqrt(1-s_val)]) # Simplified basis logic
+        rho_s = np.outer(psi_s, psi_s)
+        return np.kron(rho_s, trace_1(rho_in, N_spins))
+
+    # --- 2.3. EXECUTION LOOPS ---
+
+    # Washout (No data storage)
+    for val in s_washout:
+        rho = time_evolve_fast(inpt_fast(rho, val, N))
+
+    # Training (Vectorized feature extraction)
+    X_train = np.zeros((train, len(raw_obs)))
+    for k in range(train):
+        rho = time_evolve_fast(inpt_fast(rho, s_train[k], N))
+        X_train[k, :] = get_features(rho)
+
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+
+    # Testing (Batch prediction)
+    X_test = np.zeros((test, len(raw_obs)))
+    for k in range(test):
+        rho = time_evolve_fast(inpt_fast(rho, s_test[k], N))
+        X_test[k, :] = get_features(rho)
+
+    y_pred = model.predict(X_test)
+
+    # --- 2.4. RESULTS ---
+    cov = np.cov(y_test, y_pred)
+    return (cov[0, 1]**2) / (cov[0, 0] * cov[1, 1])
+
+# --- 3. PARAMETER SCAN SETUP ---
+h_values = np.logspace(-2, 2, 20)
+n_realizations = 100 
+# Create a flat list of (h, seed) tuples
+tasks = [(h, seed) for h in h_values for seed in range(n_realizations)]
+
+# --- 4. PARALLEL EXECUTION ---
+# results will be a flat list of length (20 * 100 = 2000)
+n_cpus = int(os.environ.get('PBS_NP', 1))
+results_flat = Parallel(n_jobs=n_cpus)(
+    delayed(run_simulation)(h, seed) for h, seed in tasks
+)
+
+# --- 5. RESHAPE AND SAVE ---
+# Reshape to (number_of_h, number_of_realizations)
+results_matrix = np.array(results_flat).reshape(len(h_values), n_realizations)
+
+# Calculate stats for plotting
+c_mean = np.mean(results_matrix, axis=1)
+c_std = np.std(results_matrix, axis=1)
+
+np.savez_compressed(
+    'quantum_sim_averaged.npz',
+    h=h_values,
+    c_raw=results_matrix,
+    c_mean=c_mean,
+    c_std=c_std,
+    N_spins=N,
+    J=J,
+    tau=tau,
+    realizations=n_realizations,
+    model="Ising"
+)
+
+print("Simulation complete. Data saved.")
