@@ -1,5 +1,5 @@
 #-------------------------------------------------------------------------------
-# Name:        Fully connected transverse field Ising model (Density matrix formulation)
+# Name:        Various Spin model hamiltonians
 # Purpose:
 #
 # Author:      Divesh Mathur
@@ -9,80 +9,108 @@
 # Licence:     <your licence>
 #-------------------------------------------------------------------------------
 
-import random
-rng = random.Random()
 import numpy as np
-import scipy as sp
-from numpy import linalg, exp
-from numpy.linalg import inv
 from scipy.linalg import expm
 
-#Hamiltonian matrix
-#N - number of spins
-#K - range of coupling constants
-#T - time step size
-#h - strength of the external magnetic field
-#rng.seed(5)
+# --- Helper for Identity ---
+def I(i): 
+    return np.identity(2**i)
 
-def I(i) :  #Identity matrix of order 2^i
-    I = np.identity(2**(i))
-    return I
+# --- Updated RNG-based J Matrix ---
+def J_matrix(N, K_min, K_max, rng):    
+    # Vectorized generation is much faster than Python nested loops
+    # rng should be an instance of np.random.default_rng()
+    j_raw = rng.uniform(K_min, K_max, (N, N))
+    # Make it symmetric and set diagonal to zero
+    j_sym = (j_raw + j_raw.T) / 2
+    np.fill_diagonal(j_sym, 0)
+    return j_sym
 
-def J(N, K_min, K_max):    #Matrix of weights, symmetric; J in [-K,K]
-    J = np.zeros([N,N])
+# --- Optimized Operator Generation ---
+# These are now "Static" – you should generate them ONCE and pass them 
+# to your Hamiltonian functions to avoid redundant math.
+
+def get_Pauli_X(N):
+    x = np.array([[0, 1], [1, 0]], dtype=complex)
+    return [np.kron(np.kron(I(i), x), I(N-i-1)) for i in range(N)]
+
+def get_Pauli_Y(N):
+    y = np.array([[0, -1j], [1j, 0]], dtype=complex)
+    return [np.kron(np.kron(I(i), y), I(N-i-1)) for i in range(N)]
+
+def get_Pauli_Z(N):
+    z = np.array([[1, 0], [0, -1]], dtype=complex)
+    return [np.kron(np.kron(I(i), z), I(N-i-1)) for i in range(N)]
+
+def get_ZZ(N, z_ops):
+    # Instead of re-calculating, we use the pre-calculated Z operators
+    zz = []
     for i in range(N):
-        for j in range(N):
-            if not i==j:
-                J[i][j] = J[j][i] = rng.random() * (K_max-K_min) + K_min
-    return J
+        for j in range(i + 1, N):
+            zz.append(z_ops[i] @ z_ops[j])
+    return zz
 
-def X(N):   #Pauli X for the composite system
-    x = np.array([[0,1],[1,0]])
-    X = ()
+# --- Optimized Hamiltonian Functions ---
+
+def Ising(N, K, h, rng, x_ops=None, z_ops=None):
+    """
+    Constructs a Hermitian Transverse Field Ising Hamiltonian.
+    """
+    if x_ops is None: x_ops = get_Pauli_X(N)
+    if z_ops is None: z_ops = get_Pauli_Z(N)
+    
+    # Weights matrix J is real and symmetric
+    W = J_matrix(N, -K/2, K/2, rng)
+    
+    # Initialize as complex to support general solvers
+    dim = 2**N
+    H = np.zeros((dim, dim), dtype=complex)
+    
+    # Interaction terms: J_ij * Xi * Xj
     for i in range(N):
-        X = X + (np.kron(np.kron(I(i),x),I(N-i-1)),)
-
-    X = np.array(X)
-    return X
-
-def Y(N):   #Pauli X for the composite system
-    y = np.array([[0,-1j],[1j,0]])
-    Y = np.zeros(N, dtype = 'object')
+        for j in range(i + 1, N):
+            # Since X is Hermitian, X @ X is Hermitian
+            H += W[i, j] * (x_ops[i] @ x_ops[j])
+                
+    # External field terms: h * Zi
     for i in range(N):
-        Y[i] = np.kron(np.kron(I(i),y),I(N-i-1))
-
-    return Y
-
-def Z(N):   #Pauli Z for the composite system
-    z = np.array([[1,0], [0,-1]])
-    Z = ()
-    for i in range(N):
-        Z = Z + (np.kron(np.kron(I(i),z),I(N-i-1)),)
-    Z = np.array(Z)
-    return Z
-
-def ZZ(N):
-    z = np.array([[1,0],[0,-1]])
-    ZZ = []
-    for i in range(N):
-        for j in range(i+1,N):
-            part_1 = np.kron(I(i),z)
-            part_1 = np.kron(part_1,I(j-i-1))
-            part_2 = np.kron(z,I(N-j-1))
-            ZZ.append(np.kron(part_1,part_2))
-    return ZZ
-
-def Heisenberg_NN(N,K,h):   #Weights are in the range (0,K); mag. field = h
-    x = X(N)
-    y = Y(N)
-    z = Z(N)
-    W = J(N,0,K)
-    H = np.zeros([2**N,2**N])
-    for i in range(N-1):
-        H = H - W[i,i+1]*(x[i]@x[i+1] + y[i]@y[i+1] + z[i]@z[i+1])
-    for i in range(N):
-        H = H - h * z[i]
+        H += h * z_ops[i]
+        
+    # Numerical safety: Force Hermiticity H = (H + H_dagger) / 2
+    # This cancels out tiny rounding errors in the imaginary parts
+    H = (H + H.conj().T) / 2
+        
     return H, W
+
+def Heisenberg(N, K, h, rng, x_ops=None, y_ops=None, z_ops=None):
+    """
+    Constructs a Hermitian Heisenberg (XXX) Hamiltonian.
+    """
+    if x_ops is None: x_ops = get_Pauli_X(N)
+    if y_ops is None: y_ops = get_Pauli_Y(N)
+    if z_ops is None: z_ops = get_Pauli_Z(N)
+    
+    W = J_matrix(N, -K/2, K/2, rng)
+    dim = 2**N
+    H = np.zeros((dim, dim), dtype=complex)
+    
+    for i in range(N):
+        for j in range(i + 1, N):
+            # Heisenberg interaction: XiXj + YiYj + ZiZj
+            interaction = (x_ops[i] @ x_ops[j]) + \
+                          (y_ops[i] @ y_ops[j]) + \
+                          (z_ops[i] @ z_ops[j])
+            H += W[i, j] * interaction
+            
+    for i in range(N):
+        H -= h * z_ops[i]
+        
+    # Final Hermitian enforcement
+    H = (H + H.conj().T) / 2
+    return H, W
+
+#---------------------------------xxxxxxxxxxxxxxxxxxxxxxxxxxxxx-------------------------------------------------------------
+# This part needs to be updated.
 
 
 def Ferromagnetic_Heisenberg(N,K,h):   #Weights are in the range (0,K); mag. field = h
@@ -154,27 +182,9 @@ def Ising_1DNN(N,K,h):  #Weights are in the range (-K/2,K/2)
         H = H + h * z[i]
     return H, W
 
-def Ising(N,K,h):   #Weights are in the range (-K/2,K/2)
-    x = X(N)
-    z = Z(N)
-    W = J(N,-K/2,K/2)
-    H = np.zeros([2**N,2**N])
-    for i in range(N):
-        for j in range (N):
-            if j > i:
-                H = H + W[i][j]*x[i]@x[j]
-            else:
-                continue
-
-    for i in range(N):
-        H = H + h*z[i]
-
-    return H, W
-
 
 def Time_evolution_operator(H, time_step):
-    U = expm(-1.j*H*time_step)
-    return U
+    return expm(-1j * H * time_step)
 
 def time_evolution(rho,H,T):
     U = Time_evolution_operator(H, 1/10)
