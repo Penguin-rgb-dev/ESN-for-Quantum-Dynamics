@@ -7,8 +7,7 @@ import tracemalloc
 import numpy as np
 from scipy.linalg import eigh
 from sklearn.linear_model import LinearRegression
-# Assuming these are your custom modules
-from Models import X, Y, Z, ZZ, Ising 
+from Models import get_Pauli_X, get_Pauli_Y, get_Pauli_Z, get_ZZ, Ising 
 from Density_matrix import trace_1, mixed_density_matrix
 
 tracemalloc.start()
@@ -36,9 +35,13 @@ y_train = y[washout:washout+train]
 y_test = y[washout+train:washout+train+test]
 
 # --- 2. MODEL SETUP ---
-N, J, h, tau = 5, 1, 0.1, 10
-Hamiltonian, _ = Ising(N, J, h)
-rho = mixed_density_matrix(10, 2, N)
+N, J, h_val, tau = 10, 1, 0.1, 10
+x_ops = get_Pauli_X(N)
+y_ops = get_Pauli_Y(N)
+z_ops = get_Pauli_Z(N)
+zz_ops = get_ZZ(N,z_ops)
+Hamiltonian, _ = Ising(N, J, h_val, rng, x_ops=x_ops, z_ops=z_ops)
+rho = mixed_density_matrix(10, 2, N, rng, complex_ensemble=True)
 
 E, U = eigh(Hamiltonian)
 U_dag = U.conj().T
@@ -46,7 +49,7 @@ phase_factors = np.exp(-1j * (E[:, np.newaxis] - E[np.newaxis, :]) * tau)
 
 # --- 3. VECTORIZE OBSERVABLES ---
 # We flatten observables into (n_obs, dim**2) to use dot products instead of Tr(rho @ O)
-raw_obs = list(X(N)) + list(Y(N)) + list(Z(N)) + ZZ(N)
+raw_obs = x_ops + y_ops + z_ops + zz_ops
 obs_matrix = np.array([o.flatten() for o in raw_obs]) 
 
 def get_features(rho_matrix):
@@ -98,4 +101,5 @@ tracemalloc.stop()
 
 print(f"Total time: {end_time-start_time:.4f}s")
 print(f"Peak RAM: {peak/10**6:.2f} MB")
+print(f"Current RAM: {current/10**6:.2f} MB")
 

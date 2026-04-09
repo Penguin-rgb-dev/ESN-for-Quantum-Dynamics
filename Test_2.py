@@ -1,20 +1,20 @@
 ## Trying joblib for NARMA using RMP and ED.
 
+import os
 from joblib import Parallel, delayed
 import numpy as np
 from scipy.linalg import eigh
 from sklearn.linear_model import LinearRegression
 # Assuming these are your custom modules
-from Models import X, Y, Z, ZZ, Ising 
+from Models import get_Pauli_X, get_Pauli_Y, get_Pauli_Z, get_ZZ, Ising 
 from Density_matrix import trace_1, mixed_density_matrix
 
-rng = np.random.default_rng(seed=42)
-
-# --- 1. DATA GENERATION (NARMA) ---
+# --- 1. GLOBAL DATA GENERATION (NARMA) ---
 n = 10
 washout, train, test = 1000, 2000, 2000
 total_steps = washout + train + test + n + 100
-s_raw = rng.uniform(0.0, 0.2, total_steps)
+rng_data = np.random.default_rng(seed=42)
+s_raw = rng_data.uniform(0.0, 0.2, total_steps)
 y_raw = np.zeros(total_steps)
 
 for i in range(n, total_steps):
@@ -29,19 +29,27 @@ s_test = s[washout+train:washout+train+test]
 y_train = y[washout:washout+train]
 y_test = y[washout+train:washout+train+test]
 
-N, J, tau = 5, 1, 10
-def run_simulation(h_val):
-    # --- 2. MODEL SETUP ---   
-    Hamiltonian, _ = Ising(N, J, h_val)
-    rho = mixed_density_matrix(10, 2, N)
+# Create the operators once
+N, J, tau = 10, 1, 10
+x_ops = get_Pauli_X(N)
+y_ops = get_Pauli_Y(N)
+z_ops = get_Pauli_Z(N)
+zz_ops = get_ZZ(N,z_ops)
 
+# --- 2. THE SIMULATION FUNCTION ---
+def run_simulation(h_val, seed):
+    # Create a local RNG for this task
+    local_rng = np.random.default_rng(seed)
+    # --- 2.1. MODEL SETUP ---   
+    Hamiltonian, _ = Ising(N, J, h_val, local_rng, x_ops=x_ops, z_ops=z_ops)
+    rho = mixed_density_matrix(10, 2, N, local_rng, complex_ensemble=True)
     E, U = eigh(Hamiltonian)
     U_dag = U.conj().T
     phase_factors = np.exp(-1j * (E[:, np.newaxis] - E[np.newaxis, :]) * tau)
 
-    # --- 3. VECTORIZE OBSERVABLES ---
+    # --- 2.2. VECTORIZE OBSERVABLES ---
     # We flatten observables into (n_obs, dim**2) to use dot products instead of Tr(rho @ O)
-    raw_obs = list(X(N)) + list(Y(N)) + list(Z(N)) + ZZ(N)
+    raw_obs = x_ops + y_ops + z_ops + zz_ops
     obs_matrix = np.array([o.flatten() for o in raw_obs]) 
 
     def get_features(rho_matrix):
@@ -59,7 +67,7 @@ def run_simulation(h_val):
         rho_s = np.outer(psi_s, psi_s)
         return np.kron(rho_s, trace_1(rho_in, N_spins))
 
-    # --- 4. EXECUTION LOOPS ---
+    # --- 2.3. EXECUTION LOOPS ---
 
     # Washout (No data storage)
     for val in s_washout:
@@ -82,21 +90,42 @@ def run_simulation(h_val):
 
     y_pred = model.predict(X_test)
 
-    # --- 5. RESULTS ---
+    # --- 2.4. RESULTS ---
     cov = np.cov(y_test, y_pred)
-    C_value = (cov[0, 1]**2) / (cov[0, 0] * cov[1, 1])
-    return C_value
+    return (cov[0, 1]**2) / (cov[0, 0] * cov[1, 1])
 
-h_values = np.logspace(-2,2,20)
+# --- 3. PARAMETER SCAN SETUP ---
+h_values = np.logspace(-2, 2, 20)
+n_realizations = 100 
+# Create a flat list of (h, seed) tuples
+tasks = [(h, seed) for h in h_values for seed in range(n_realizations)]
 
-# This runs on all available cores simultaneously
-results = Parallel(n_jobs=-1)(delayed(run_simulation)(h) for h in h_values)
+# --- 4. PARALLEL EXECUTION ---
+# results will be a flat list of length (20 * 100 = 2000)
+n_cpus = int(os.environ.get('PBS_NP', 1))
+results_flat = Parallel(n_jobs=n_cpus)(
+    delayed(run_simulation)(h, seed) for h, seed in tasks
+)
+
+# --- 5. RESHAPE AND SAVE ---
+# Reshape to (number_of_h, number_of_realizations)
+results_matrix = np.array(results_flat).reshape(len(h_values), n_realizations)
+
+# Calculate stats for plotting
+c_mean = np.mean(results_matrix, axis=1)
+c_std = np.std(results_matrix, axis=1)
+
 np.savez_compressed(
-    'quantum_sim_v1.npz',
-    h = h_values,
-    c=results,
+    'quantum_sim_averaged.npz',
+    h=h_values,
+    c_raw=results_matrix,
+    c_mean=c_mean,
+    c_std=c_std,
     N_spins=N,
     J=J,
-    time_step=tau,
-    model_type="Ising"
+    tau=tau,
+    realizations=n_realizations,
+    model="Ising"
 )
+
+print("Simulation complete. Data saved.")
