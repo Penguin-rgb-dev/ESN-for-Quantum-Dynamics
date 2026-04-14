@@ -205,7 +205,7 @@ def ran():
     for i in range(5):
         print(rng.random())
 
-print('Module Hamiltonian Loaded!')
+print('Module Models (Optimized) Loaded!')
 
 
 
