@@ -101,7 +101,8 @@ tasks = [(h, seed) for h in h_values for seed in range(n_realizations)]
 
 # --- 4. PARALLEL EXECUTION ---
 # results will be a flat list of length (20 * 100 = 2000)
-n_cpus = int(os.environ.get('PBS_NP', 1))
+n_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
+print(f"Running in parallel with {n_cpus} CPUs")
 results_flat = Parallel(n_jobs=n_cpus)(
     delayed(run_simulation)(h, seed) for h, seed in tasks
 )
