@@ -12,7 +12,7 @@ from Models import get_Pauli_X, get_Pauli_Z, Ising
 from Density_matrix import trace_1, mixed_density_matrix
 
 # --- 1. Simulation Logic ---
-def run_stability_test(seed, use_stabilization=True):
+def run_stability_test(seed, use_margin=True, use_Ridge=True):
     # Parameters
     N, J_val, h_val, tau, V = 7, 1, 0.5, 4, 10
     washout_len, train_len, test_len = 1000, 10000, 2000
@@ -35,7 +35,7 @@ def run_stability_test(seed, use_stabilization=True):
     for k in range(len(y)):
         y[k] = A[k*10]
     y = (y - min(y))/(max(y)-min(y))
-    if use_stabilization:
+    if use_margin:
         # Scale to [0.1, 0.9] for safety
         y = 0.1 + 0.8 *y
     
@@ -110,7 +110,7 @@ def run_stability_test(seed, use_stabilization=True):
     X_features = (X_features + 1) / 2
     X_features += rng.uniform(-1e-5, 1e-5, X_features.shape)
 
-    if use_stabilization:
+    if use_Ridge:
         model = Ridge(alpha=1e-4).fit(X_features, y_train)
     else:
         model = LinearRegression().fit(X_features, y_train)
@@ -139,13 +139,13 @@ def run_stability_test(seed, use_stabilization=True):
 # --- 2. Main Execution ---
 if __name__ == "__main__":
     n_realisations = 100
-    n_cpus = int(os.environ.get('PBS_NP', 1))
+    n_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
 
     print(f"Probing stability over {n_realisations} realisations...")
     
     # Run Stabilized Version
     results = Parallel(n_jobs=n_cpus, verbose=10)(
-        delayed(run_stability_test)(seed, use_stabilization=True) 
+        delayed(run_stability_test)(seed, use_margin=True, use_Ridge=False) 
         for seed in range(n_realisations)
     )
 
