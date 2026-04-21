@@ -92,12 +92,10 @@ def run_stability_test(seed, use_margin=True, use_Ridge=True):
     # Pre-calculate diagonals of Z for fast trace-less expectation values
     z_diags = [op.diagonal() for op in z_ops]
 
-    print("Starting Washout Phase...")
     for k in range(washout_len):
         rho = input_map(rho, s_washout[k], N)
         rho = evolve_full_step(rho)
 
-    print("Starting Training Phase...")
     for k in range(train_len):
         rho = input_map(rho, s_train[k], N)
         for v in range(V):
