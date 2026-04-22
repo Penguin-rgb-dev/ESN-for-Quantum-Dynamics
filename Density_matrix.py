@@ -88,4 +88,3 @@ def basis(N):
     eye = np.eye(dim)
     return [eye[i] for i in range(dim)]
 
-print("Module Density Matrix (Optimized) Loaded!")

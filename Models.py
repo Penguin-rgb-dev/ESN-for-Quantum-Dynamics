@@ -205,7 +205,6 @@ def ran():
     for i in range(5):
         print(rng.random())
 
-print('Module Models (Optimized) Loaded!')
 
 
 
