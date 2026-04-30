@@ -4,6 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64          # This value is what Python will now see
 #SBATCH --partition=short
+#SBATCH --qos=short
 #SBATCH --time=04:00:00
 #SBATCH --mem=128G
 
