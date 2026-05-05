@@ -4,6 +4,7 @@ from sklearn.kernel_ridge import KernelRidge
 from Models import get_Pauli_X, get_Pauli_Z, Ising
 from Density_matrix import trace_1, mixed_density_matrix
 import sys
+import joblib
 
 
 # --- 1. Parameters ---
@@ -12,7 +13,7 @@ J_val = 1      # Coupling strength
 h_val = 0.5    # Transverse field
 tau = 4        # Total time per step
 V = 10         # Internal time steps (sub-sampling)
-seed = 62
+seed = 42
 rng = np.random.default_rng(seed)
 use_stabilization=True
 
@@ -108,7 +109,7 @@ X_features = (X_features + 1) / 2
 X_features += rng.uniform(-1e-5, 1e-5, X_features.shape)
 
 model = KernelRidge(kernel='rbf', gamma=0.1, alpha=1e-5).fit(X_features,y_train)
-
+#joblib.dump(model,'Data/kernel_ridge_model.pkl')
 print("Training Complete.")
 
 # --- 6. Evaluation Phase (One-step-ahead Prediction) ---
